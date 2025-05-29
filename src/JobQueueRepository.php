@@ -36,7 +36,7 @@ class JobQueueRepository
             ));
     }
 
-    public static function schedule(string $jobName, array $data): void
+    public static function schedule(string $jobName, array $data = []): void
     {
         $timestamp = static::getTimestamp();
         DB::table('job_queue')->updateOrInsert([
@@ -57,6 +57,16 @@ class JobQueueRepository
             ->count();
 
         return $count > 0;
+    }
+
+    public static function isAnyTaskPending(string $jobName): bool
+    {
+        $anyTask = DB::table('job_queue')
+            ->where('job', '=', $jobName)
+            ->where('status', '=', 'new')
+            ->first('id');
+
+        return $anyTask !== null;
     }
 
     public static function updateJob(int $id, array $result): void
