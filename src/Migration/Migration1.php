@@ -16,10 +16,13 @@ class Migration1 implements MigrationInterface
             DB::schema()->create('job_queue', static function(Blueprint $table): void {
                 $table->unsignedInteger('id', true)->autoIncrement();
                 $table->timestamps();
+                $table->timestamp('run_after');
+                $table->tinyInteger('priority')->default(0);
                 $table->string('job', 50);
-                $table->string('status', 20)->default('new');
-                $table->text('data')->nullable();
+                $table->enum('status', ['new', 'processing', 'success', 'error'])->default('new');
+                $table->json('params')->nullable();
                 $table->text('message')->nullable();
+                $table->index(['status']);
             });
         }
     }

@@ -80,7 +80,7 @@ class JobQueueModule extends AbstractModule implements ModuleCustomInterface, Mi
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $this->runMigrations('TH_OPT');
+        $this->runMigrations('JQ');
         return $handler->handle($request);
     }
 }

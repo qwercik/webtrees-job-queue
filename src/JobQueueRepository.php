@@ -5,88 +5,79 @@ declare(strict_types=1);
 namespace Komputeryk\Webtrees\JobQueue;
 
 use Fisharebest\Webtrees\DB;
-use Illuminate\Support\Collection;
 use Komputeryk\Webtrees\JobQueue\Job;
 
 class JobQueueRepository
 {
-    public static function getPendingJobs(int $limit): Collection
+    public function schedule(Job $job, int $delaySeconds = 0): void
     {
-        $status = uniqid();
+        $now = $this->getNow();
+        $runAfter = $this->getNow($delaySeconds ?? 0);
 
-        DB::table('job_queue')
-            ->where('status', '=', 'new')
-            ->orWhere(fn($q) =>
-                $q->whereNotIn('status', ['new', 'error', 'success'])
-                ->where('updated_at', '<', static::getTimestamp(-60))
-            )
-            ->limit($limit)
-            ->orderBy('updated_at', 'asc')
-            ->update(['status' => $status, 'updated_at' => static::getTimestamp()]);
-
-        return DB::table('job_queue')
-            ->where('status', '=', $status)
-            ->orderBy('updated_at', 'asc')
-            ->limit($limit)
-            ->get()
-            ->map(fn($job) => new Job(
-                (int)$job->id,
-                $job->job,
-                json_decode($job->data, true)
-            ));
-    }
-
-    public static function schedule(string $jobName, array $data = []): void
-    {
-        $timestamp = static::getTimestamp();
-        DB::table('job_queue')->updateOrInsert([
-            'created_at' => $timestamp,
-            'updated_at' => $timestamp,
-            'job' => $jobName,
-            'data' => self::encodeData($data),
+        DB::table('job_queue')->insert([
+            'created_at' => $now,
+            'updated_at' => $now,
+            'run_after' => $runAfter,
+            'priority' => $job->priority,
+            'job' => $job->job,
+            'params' => json_encode($job->params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'status' => 'new',
         ]);
     }
 
-    public static function isScheduled(string $jobName, array $data): bool
+    public function getJob(): ?Job
     {
-        $count = DB::table('job_queue')
-            ->where('job', '=', $jobName)
-            ->where('data', '=', self::encodeData($data))
-            ->where('status', '=', 'new')
-            ->count();
+        return DB::transaction(function () {
+            $result = DB::table('job_queue')
+                ->where('status', 'new')
+                ->where('run_after', '<=', $this->getNow())
+                ->orderBy('priority', 'desc')
+                ->orderBy('updated_at')
+                ->lock('FOR UPDATE SKIP LOCKED')
+                ->limit(1)
+                ->select()
+                ->first();
 
-        return $count > 0;
+            if ($result === null) {
+                return null;
+            }
+
+            DB::table('job_queue')
+                ->where('id', $result->id)
+                ->update(['status' => 'processing', 'updated_at' => $this->getNow()]);
+
+            return Job::fromDb($result);
+        });
     }
 
-    public static function isAnyTaskPending(string $jobName): bool
-    {
-        $anyTask = DB::table('job_queue')
-            ->where('job', '=', $jobName)
-            ->where('status', '=', 'new')
-            ->first('id');
-
-        return $anyTask !== null;
-    }
-
-    public static function updateJob(int $id, array $result): void
+    public function setJobSuccess(Job $job): void
     {
         DB::table('job_queue')
-            ->where('id', '=', $id)
+            ->where('id', $job->id)
             ->update([
-                ...$result,
-                'updated_at' => static::getTimestamp(),
+                'status' => 'success',
+                'updated_at' => $this->getNow(),
             ]);
     }
 
-    private static function encodeData(array $data): string
+    public function setJobError(Job $job, string $message): void
     {
-        ksort($data);
-        return json_encode($data);
+        DB::table('job_queue')
+            ->where('id', $job->id)
+            ->update([
+                'status' => 'error',
+                'updated_at' => $this->getNow(),
+                'message' => $message,
+            ]);
     }
 
-    private static function getTimestamp(int $offset = 0): string
+    private function formatTimestamp(int $time): string
     {
-        return date('Y-m-d H:i:s', time() + $offset);
+        return date('Y-m-d H:i:s', $time);
+    }
+
+    private function getNow(int $delay = 0): string
+    {
+        return $this->formatTimestamp(time() + $delay);
     }
 }
